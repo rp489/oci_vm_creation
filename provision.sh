@@ -2,7 +2,7 @@
 
 # =============================================================
 # Oplify - Oracle Cloud VM Provisioner
-# One attempt per invocation. GitHub Actions schedules the next attempt.
+# One attempt per invocation. The GitHub retry runner handles clear rejections.
 # Defaults to a read-only preflight; launch requires PROVISION_MODE=launch.
 # =============================================================
 

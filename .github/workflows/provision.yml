@@ -10,6 +10,10 @@ on:
         type: choice
         options: [preflight, launch]
         default: preflight
+      automatic:
+        description: 'Automatic continuation requires OCI_PROVISIONING_ENABLED=true.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -22,9 +26,9 @@ concurrency:
 jobs:
   provision:
     # Publishing alone does not enable automatic cloud creation.
-    if: github.event_name == 'workflow_dispatch' || vars.OCI_PROVISIONING_ENABLED == 'true'
+    if: (github.event_name == 'workflow_dispatch' && !inputs.automatic) || vars.OCI_PROVISIONING_ENABLED == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 330
     env:
       OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
       OCI_USER: ${{ secrets.OCI_USER }}
@@ -50,9 +54,16 @@ jobs:
           echo "$RUNNER_TEMP/oci-cli/bin" >> "$GITHUB_PATH"
       - name: Check or provision the VM
         id: vm
-        run: bash provision.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -u retry.py
       - name: Pause after an accepted launch, existing VM, or uncertain response
         if: always() && steps.vm.outputs.pause == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh api --method PUT "repos/$GITHUB_REPOSITORY/actions/workflows/provision.yml/disable"
+      - name: Continue capacity retries in a new run
+        if: success() && steps.vm.outputs.continue == 'true' && vars.OCI_PROVISIONING_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run provision.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" --field mode=launch --field automatic=true

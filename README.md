@@ -1,6 +1,6 @@
 # Hyderabad Always Free VM provisioner
 
-GitHub Actions runs one OCI provisioning attempt on a five-minute schedule. Railway is not required. Each invocation exits after its preflight or launch attempt.
+GitHub Actions retries OCI provisioning at five-minute intervals. Railway is not required. Each launch run makes up to 60 attempts, then requests an automatic continuation while provisioning remains enabled. The five-minute schedule provides another way to start a run. A direct invocation of `provision.sh` still makes only one attempt.
 
 ## Resource limits
 
@@ -61,9 +61,13 @@ The workflow must be on the repository's default branch for scheduled runs. Publ
 2. Enter the OCI secrets and confirm Hyderabad is the home region.
 3. Open Actions > Provision Hyderabad Always Free VM > Run workflow, leaving the mode as `preflight`. This reads OCI without creating resources.
 4. Check that the preflight succeeds and approve the specific VM creation configuration.
-5. Set `OCI_PROVISIONING_ENABLED=true` for scheduled attempts, or manually run the workflow with mode `launch` for one attempt.
+5. Set `OCI_PROVISIONING_ENABLED=true` for automatic provisioning, then manually run the workflow with mode `launch` to start immediately. Clear capacity or rate-limit rejections are retried within the active run.
 
 The schedule runs at minutes 2, 7, 12, and so on through 57, avoiding the start of the hour. GitHub may delay or drop scheduled runs. Public-repository schedules disable after 60 days without repository activity.
+
+Within a launch run, the next attempt starts no sooner than five minutes after the previous attempt started. Every attempt repeats the inventory and duplicate checks. After 60 rejected attempts, the workflow uses its built-in token to dispatch a new run with `automatic=true`; that run requires `OCI_PROVISIONING_ENABLED=true`. Runner startup and GitHub queuing can delay the transition between runs. Jobs have a 330-minute timeout, below GitHub's six-hour runner limit. An unexpected job failure stops that run and does not dispatch a continuation.
+
+To stop an active retry loop, disable this workflow in GitHub Actions. The loop checks that state before each attempt. Set `OCI_PROVISIONING_ENABLED=false` to block future scheduled runs and automatic continuations; this flag does not interrupt an active run. Cancel the active run if an immediate stop is required, and inspect OCI for an unresolved launch before restarting.
 
 Standard GitHub-hosted runners are free for public repositories. Private repositories use the owner's Actions allowance; a five-minute schedule can exceed it. Check the account's plan and spending controls before enabling a private repository's schedule.
 
@@ -74,9 +78,9 @@ Standard GitHub-hosted runners are free for public repositories. Private reposit
 
 Only one workflow run operates at a time. Before launching, the provisioner checks for an existing non-terminated instance with the target display name in the target compartment. Existing instances, including provisioning or stopped instances, prevent a second launch. A matching name with a conflicting shape or availability domain, or multiple matching instances, fails the preflight.
 
-A clear out-of-host-capacity or rate-limit rejection allows the next scheduled attempt. Every other launch error, including an uncertain timeout or server error, requests that the workflow be disabled for manual investigation. A successful launch response also disables the workflow immediately; OCI acceptance does not prove the VM has reached RUNNING. Confirm that state in the OCI Console.
+A clear out-of-host-capacity or rate-limit rejection allows the next attempt after the five-minute interval. Every other launch error, including an uncertain timeout or server error, stops retries and requests that the workflow be disabled for manual investigation. A successful launch response also disables the workflow immediately; OCI acceptance does not prove the VM has reached RUNNING. Confirm that state in the OCI Console.
 
-The workflow uses its built-in GitHub token with `actions: write` only to disable itself. If disabling fails, the run reports failure; disable it manually and check OCI before resuming. Never enable another provisioner for the same target concurrently. If a run is interrupted during a launch, inspect OCI before enabling or re-running it.
+The workflow uses its built-in GitHub token with `actions: write` to check its state, disable itself, and dispatch capacity-retry continuations. It does not store a PAT. If disabling or continuation fails, the run reports failure; inspect OCI and the run before resuming. Never enable another provisioner for the same target concurrently. If a run is interrupted during a launch, inspect OCI before enabling or re-running it.
 
 To resume after investigation, first confirm no matching VM or unresolved launch exists, then enable the workflow in GitHub Actions. Do not change the display name to bypass the duplicate check.
 
