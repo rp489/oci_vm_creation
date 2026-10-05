@@ -1,0 +1,58 @@
+name: Provision Hyderabad Always Free VM
+
+on:
+  schedule:
+    - cron: '2-57/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Preflight reads OCI only. Launch can create one VM.'
+        type: choice
+        options: [preflight, launch]
+        default: preflight
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: hyderabad-always-free-provisioner
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    # Publishing alone does not enable automatic cloud creation.
+    if: github.event_name == 'workflow_dispatch' || vars.OCI_PROVISIONING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
+      OCI_USER: ${{ secrets.OCI_USER }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+      OCI_COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
+      OCI_SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
+      OCI_AVAILABILITY_DOMAIN: ${{ secrets.OCI_AVAILABILITY_DOMAIN }}
+      VM_SSH_PUBLIC_KEY: ${{ secrets.VM_SSH_PUBLIC_KEY }}
+      OCI_IMAGE_ID: ${{ secrets.OCI_IMAGE_ID }}
+      OCI_REGION: ap-hyderabad-1
+      VM_DISPLAY_NAME: ${{ vars.VM_DISPLAY_NAME || 'oplify-agent' }}
+      PROVISION_MODE: ${{ github.event_name == 'schedule' && 'launch' || inputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install OCI CLI in the temporary runner
+        run: |
+          python -m venv "$RUNNER_TEMP/oci-cli"
+          "$RUNNER_TEMP/oci-cli/bin/pip" install --disable-pip-version-check 'oci-cli==3.94.1'
+          echo "$RUNNER_TEMP/oci-cli/bin" >> "$GITHUB_PATH"
+      - name: Check or provision the VM
+        id: vm
+        run: bash provision.sh
+      - name: Pause after an accepted launch, existing VM, or uncertain response
+        if: always() && steps.vm.outputs.pause == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/$GITHUB_REPOSITORY/actions/workflows/provision.yml/disable"
