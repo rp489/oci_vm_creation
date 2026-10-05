@@ -180,6 +180,26 @@ class InventoryTests(unittest.TestCase):
                 preflight.cli("iam", "compartment", "list")
         self.assertNotIn("synthetic-sensitive-response", str(result.exception))
 
+    def test_cli_successful_empty_list_is_valid(self):
+        self.mock.stop()
+        result = subprocess.CompletedProcess(["oci"], 0, stdout="", stderr="")
+        with patch.object(preflight.subprocess, "run", return_value=result):
+            self.assertEqual(preflight.cli("iam", "compartment", "list"), [])
+
+    def test_cli_successful_empty_get_is_rejected(self):
+        self.mock.stop()
+        result = subprocess.CompletedProcess(["oci"], 0, stdout="", stderr="")
+        with patch.object(preflight.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(ValueError, "Unable to verify"):
+                preflight.cli("network", "subnet", "get")
+
+    def test_cli_malformed_success_response_is_rejected(self):
+        self.mock.stop()
+        result = subprocess.CompletedProcess(["oci"], 0, stdout="invalid response", stderr="")
+        with patch.object(preflight.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(ValueError, "Unable to verify"):
+                preflight.cli("iam", "compartment", "list")
+
 
 class ShellTests(unittest.TestCase):
     @classmethod

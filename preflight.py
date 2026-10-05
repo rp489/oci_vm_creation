@@ -17,6 +17,10 @@ def cli(*args):
              "--connection-timeout", "10", "--read-timeout", "45"],
             capture_output=True, text=True, timeout=70, check=True,
         )
+        # OCI CLI suppresses the JSON output for successful empty lists.
+        # Failed requests still raise above, and empty get responses are errors.
+        if args[2] == "list" and not result.stdout.strip():
+            return []
         return json.loads(result.stdout)["data"]
     except (subprocess.SubprocessError, OSError, ValueError, KeyError) as exc:
         # CLI errors can contain account identifiers. Report only the operation.
