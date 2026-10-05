@@ -14,8 +14,9 @@ SCRIPT = Path(__file__).with_name("provision.sh")
 def workflow_active():
     if os.environ.get("GITHUB_ACTIONS") != "true":
         return True
+    workflow_file = os.environ.get("OCI_WORKFLOW_FILE", "provision.yml")
     result = subprocess.run(
-        ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/workflows/provision.yml",
+        ["gh", "api", f"repos/{os.environ['GITHUB_REPOSITORY']}/actions/workflows/{workflow_file}",
          "--jq", ".state"], capture_output=True, text=True, timeout=30,
     )
     if result.returncode:

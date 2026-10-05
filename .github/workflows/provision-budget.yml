@@ -1,0 +1,79 @@
+name: Provision Hyderabad VM with a 1000-attempt limit
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Preflight reads OCI only. Launch can create one VM.'
+        type: choice
+        options: [preflight, launch]
+        default: preflight
+      automatic:
+        description: 'Automatic continuation requires OCI_PROVISIONING_ENABLED=true.'
+        type: boolean
+        default: false
+      remaining_attempts:
+        description: 'Maximum further attempts across all runs (1-1000).'
+        type: number
+        default: 1000
+      attempts_per_run:
+        description: 'Attempts in this run (1-60); continuations use 60.'
+        type: number
+        default: 60
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: hyderabad-vm-budget-1000
+  cancel-in-progress: false
+
+jobs:
+  provision:
+    # Publishing alone does not enable automatic cloud creation.
+    if: (github.event_name == 'workflow_dispatch' && !inputs.automatic) || vars.OCI_PROVISIONING_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      OCI_TENANCY: ${{ secrets.OCI_TENANCY }}
+      OCI_USER: ${{ secrets.OCI_USER }}
+      OCI_FINGERPRINT: ${{ secrets.OCI_FINGERPRINT }}
+      OCI_PRIVATE_KEY: ${{ secrets.OCI_PRIVATE_KEY }}
+      OCI_COMPARTMENT_ID: ${{ secrets.OCI_COMPARTMENT_ID }}
+      OCI_SUBNET_ID: ${{ secrets.OCI_SUBNET_ID }}
+      OCI_AVAILABILITY_DOMAIN: ${{ secrets.OCI_AVAILABILITY_DOMAIN }}
+      VM_SSH_PUBLIC_KEY: ${{ secrets.VM_SSH_PUBLIC_KEY }}
+      OCI_IMAGE_ID: ${{ secrets.OCI_IMAGE_ID }}
+      OCI_REGION: ap-hyderabad-1
+      OCI_WORKFLOW_FILE: provision-budget.yml
+      VM_DISPLAY_NAME: ${{ vars.VM_DISPLAY_NAME || 'oplify-agent' }}
+      PROVISION_MODE: ${{ inputs.mode }}
+      REMAINING_ATTEMPTS: ${{ inputs.remaining_attempts }}
+      RETRY_WINDOW_ATTEMPTS: ${{ inputs.attempts_per_run }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install OCI CLI in the temporary runner
+        run: |
+          python -m venv "$RUNNER_TEMP/oci-cli"
+          "$RUNNER_TEMP/oci-cli/bin/pip" install --disable-pip-version-check 'oci-cli==3.94.1'
+          echo "$RUNNER_TEMP/oci-cli/bin" >> "$GITHUB_PATH"
+      - name: Check or provision the VM
+        id: vm
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python -u retry.py
+      - name: Pause after acceptance, an existing VM, uncertainty, or the attempt limit
+        if: always() && steps.vm.outputs.pause == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/$GITHUB_REPOSITORY/actions/workflows/$OCI_WORKFLOW_FILE/disable"
+      - name: Continue capacity retries in a new run
+        if: success() && steps.vm.outputs.continue == 'true' && vars.OCI_PROVISIONING_ENABLED == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ATTEMPTS_REMAINING: ${{ steps.vm.outputs.attempts_remaining }}
+        run: gh workflow run "$OCI_WORKFLOW_FILE" --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" --field mode=launch --field automatic=true --field remaining_attempts="$ATTEMPTS_REMAINING"

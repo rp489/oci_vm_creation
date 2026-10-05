@@ -59,11 +59,13 @@ Publish the workflow on the repository's default branch. Publishing alone does n
 
 1. Publish the reviewed changes to the intended repository.
 2. Enter the OCI secrets and confirm Hyderabad is the home region.
-3. Open Actions > Provision Hyderabad Always Free VM > Run workflow, leaving the mode as `preflight`. This reads OCI without creating resources.
+3. Open Actions > Provision Hyderabad VM with a 1000-attempt limit > Run workflow, leaving the mode as `preflight`. This reads OCI without creating resources.
 4. Check that the preflight succeeds and approve the specific VM creation configuration.
 5. Set `OCI_PROVISIONING_ENABLED=true` for automatic provisioning, then manually run the workflow with mode `launch` and `remaining_attempts=1000` to start immediately. Clear capacity or rate-limit rejections are retried within the active run. Do not start another launch chain while one is active.
 
 The workflow starts immediately when dispatched and handles five-minute waits itself. It has no cron trigger, so a delayed scheduled run cannot accidentally start a new 1,000-attempt budget. GitHub runner startup and queuing can still delay execution.
+
+The active workflow file is `.github/workflows/provision-budget.yml`. Keep the legacy `provision.yml` workflow disabled. A legacy queued run with no jobs could not be cancelled because GitHub returned a state conflict; its retry runner checks that disabled workflow before any launch. The replacement uses a separate concurrency group, and all continuations and state checks target the replacement workflow.
 
 Within a launch run, the next attempt starts no sooner than five minutes after the previous attempt started. Every attempt repeats the inventory and duplicate checks. After at most 60 rejected attempts, the workflow uses its built-in token to dispatch a new run with `automatic=true` and the reduced `remaining_attempts`; that run requires `OCI_PROVISIONING_ENABLED=true`. The final run stops and disables the workflow when the total budget reaches zero. Runner startup and GitHub queuing can delay transitions. Jobs have a 330-minute timeout, below GitHub's six-hour runner limit. An unexpected job failure stops that run and does not dispatch a continuation.
 

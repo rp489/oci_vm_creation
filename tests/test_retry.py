@@ -160,6 +160,13 @@ class RetryTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Cannot verify workflow state"):
                 retry.workflow_active()
 
+    def test_state_check_uses_the_current_workflow(self):
+        os.environ.update(GITHUB_ACTIONS="true", GITHUB_REPOSITORY="example/test",
+                          OCI_WORKFLOW_FILE="provision-budget.yml")
+        with patch.object(retry.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout="active\n")) as request:
+            self.assertTrue(retry.workflow_active())
+        self.assertIn("repos/example/test/actions/workflows/provision-budget.yml", request.call_args.args[0])
+
 
 if __name__ == "__main__":
     unittest.main()
