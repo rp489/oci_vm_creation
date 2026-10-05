@@ -1,8 +1,6 @@
 name: Provision Hyderabad Always Free VM
 
 on:
-  schedule:
-    - cron: '2-57/5 * * * *'
   workflow_dispatch:
     inputs:
       mode:
@@ -14,6 +12,14 @@ on:
         description: 'Automatic continuation requires OCI_PROVISIONING_ENABLED=true.'
         type: boolean
         default: false
+      remaining_attempts:
+        description: 'Maximum further attempts across all runs (1-1000).'
+        type: number
+        default: 1000
+      attempts_per_run:
+        description: 'Attempts in this run (1-60); continuations use 60.'
+        type: number
+        default: 60
 
 permissions:
   contents: read
@@ -41,7 +47,9 @@ jobs:
       OCI_IMAGE_ID: ${{ secrets.OCI_IMAGE_ID }}
       OCI_REGION: ap-hyderabad-1
       VM_DISPLAY_NAME: ${{ vars.VM_DISPLAY_NAME || 'oplify-agent' }}
-      PROVISION_MODE: ${{ github.event_name == 'schedule' && 'launch' || inputs.mode }}
+      PROVISION_MODE: ${{ inputs.mode }}
+      REMAINING_ATTEMPTS: ${{ inputs.remaining_attempts }}
+      RETRY_WINDOW_ATTEMPTS: ${{ inputs.attempts_per_run }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -57,7 +65,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python -u retry.py
-      - name: Pause after an accepted launch, existing VM, or uncertain response
+      - name: Pause after acceptance, an existing VM, uncertainty, or the attempt limit
         if: always() && steps.vm.outputs.pause == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
@@ -66,4 +74,5 @@ jobs:
         if: success() && steps.vm.outputs.continue == 'true' && vars.OCI_PROVISIONING_ENABLED == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run provision.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" --field mode=launch --field automatic=true
+          ATTEMPTS_REMAINING: ${{ steps.vm.outputs.attempts_remaining }}
+        run: gh workflow run provision.yml --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF_NAME" --field mode=launch --field automatic=true --field remaining_attempts="$ATTEMPTS_REMAINING"

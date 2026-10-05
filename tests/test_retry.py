@@ -46,7 +46,8 @@ class RetryTests(unittest.TestCase):
              patch.object(retry, "workflow_active", side_effect=active or [True] * (attempts + 1)), \
              patch.object(retry, "MAX_ATTEMPTS", attempts), \
              patch.object(retry.time, "monotonic", side_effect=lambda: self.clock), \
-             patch.object(retry.time, "sleep", side_effect=sleep):
+             patch.object(retry.time, "sleep", side_effect=sleep), \
+             patch("builtins.print"):
             result = retry.run()
         return result, calls, sleeps
 
@@ -82,6 +83,53 @@ class RetryTests(unittest.TestCase):
         self.assertEqual(calls, [0, 300, 600])
         self.assertEqual(sleeps, [290, 290, 290])
         self.assertTrue(self.output.read_text().endswith("continue=true\n"))
+        self.assertIn("attempts_remaining=997\n", self.output.read_text())
+
+    def test_total_budget_stops_without_sleep_or_continuation(self):
+        os.environ["REMAINING_ATTEMPTS"] = "1"
+        code, calls, sleeps = self.invoke([(0, "pause=false\n")])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [0])
+        self.assertEqual(sleeps, [])
+        self.assertTrue(self.output.read_text().endswith("pause=true\n"))
+        self.assertNotIn("continue=true", self.output.read_text())
+
+    def test_budget_survives_handoffs_and_stops_after_exactly_1000_rejections(self):
+        remaining = 1000
+        total_calls = 0
+        while remaining:
+            os.environ["REMAINING_ATTEMPTS"] = str(remaining)
+            self.output.write_text("")
+            code, calls, _ = self.invoke([(0, "pause=false\n")] * 60, attempts=60)
+            self.assertEqual(code, 0)
+            total_calls += len(calls)
+            output = self.output.read_text()
+            remaining -= len(calls)
+            if remaining:
+                self.assertIn(f"attempts_remaining={remaining}\n", output)
+                self.assertTrue(output.endswith("continue=true\n"))
+            else:
+                self.assertNotIn("continue=true", output)
+                self.assertTrue(output.endswith("pause=true\n"))
+        self.assertEqual(total_calls, 1000)
+
+    def test_short_initial_window_keeps_remaining_budget(self):
+        os.environ["RETRY_WINDOW_ATTEMPTS"] = "1"
+        code, calls, sleeps = self.invoke([(0, "pause=false\n")])
+        self.assertEqual(code, 0)
+        self.assertEqual(calls, [0])
+        self.assertEqual(sleeps, [290])
+        self.assertIn("attempts_remaining=999\n", self.output.read_text())
+
+    def test_invalid_budget_or_window_never_launches(self):
+        for name, values in (("REMAINING_ATTEMPTS", ("0", "1001", "2.5", "invalid", "١")),
+                             ("RETRY_WINDOW_ATTEMPTS", ("0", "61", "1.5"))):
+            for value in values:
+                with self.subTest(name=name, value=value), patch.dict(os.environ, {name:value}), \
+                     patch.object(retry.subprocess, "run") as launch:
+                    with self.assertRaises(RuntimeError):
+                        retry.run()
+                    launch.assert_not_called()
 
     def test_disabling_during_final_wait_prevents_continuation(self):
         code, calls, sleeps = self.invoke([(0, "pause=false\n")], active=[True, False], attempts=1)

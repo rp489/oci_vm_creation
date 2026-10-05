@@ -31,13 +31,21 @@ def run():
     if not output_name:
         raise RuntimeError("Launch retries require GITHUB_OUTPUT to track safe retry decisions.")
     output = Path(output_name)
-    for attempt in range(1, MAX_ATTEMPTS + 1):
+    remaining_text = os.environ.get("REMAINING_ATTEMPTS", "1000")
+    window_text = os.environ.get("RETRY_WINDOW_ATTEMPTS", str(MAX_ATTEMPTS))
+    if not remaining_text.isascii() or not remaining_text.isdecimal() or not 1 <= int(remaining_text) <= 1000:
+        raise RuntimeError("Remaining attempts must be an integer between 1 and 1000.")
+    if not window_text.isascii() or not window_text.isdecimal() or not 1 <= int(window_text) <= MAX_ATTEMPTS:
+        raise RuntimeError(f"Attempts per run must be an integer between 1 and {MAX_ATTEMPTS}.")
+    remaining = int(remaining_text)
+    window = min(int(window_text), remaining)
+    for attempt in range(1, window + 1):
         if not workflow_active():
             print("Workflow is disabled. No further launch will be attempted.", flush=True)
             return 0
         started = time.monotonic()
         offset = output.stat().st_size if output.exists() else 0
-        print(f"Provisioning attempt {attempt}/{MAX_ATTEMPTS}.", flush=True)
+        print(f"Provisioning attempt {attempt}/{window}; {remaining} attempts remaining in the budget.", flush=True)
         result = subprocess.run(["bash", str(SCRIPT)])
         if result.returncode:
             return result.returncode
@@ -47,12 +55,19 @@ def run():
         # output, acceptance, an existing VM, and uncertainty all stop here.
         if not pauses or pauses[-1] != "pause=false":
             return 0
+        remaining -= 1
+        if remaining == 0:
+            with output.open("a", encoding="utf-8") as stream:
+                stream.write("pause=true\n")
+            print("Attempt limit reached without an accepted launch. Automatic provisioning will stop.", flush=True)
+            return 0
         delay = max(0, INTERVAL_SECONDS - (time.monotonic() - started))
         print(f"Capacity unavailable or rate limited. Next attempt in {delay:.0f} seconds.", flush=True)
         time.sleep(delay)
-        if attempt == MAX_ATTEMPTS:
+        if attempt == window:
             if workflow_active():
                 with output.open("a", encoding="utf-8") as stream:
+                    stream.write(f"attempts_remaining={remaining}\n")
                     stream.write("continue=true\n")
                 print("Retry window completed. Requesting an automatic continuation.", flush=True)
             return 0

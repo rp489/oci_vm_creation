@@ -1,6 +1,6 @@
 # Hyderabad Always Free VM provisioner
 
-GitHub Actions retries OCI provisioning at five-minute intervals. Railway is not required. Each launch run makes up to 60 attempts, then requests an automatic continuation while provisioning remains enabled. The five-minute schedule provides another way to start a run. A direct invocation of `provision.sh` still makes only one attempt.
+GitHub Actions retries OCI provisioning at five-minute intervals, with a total budget of up to 1,000 further attempts. Railway is not required. Each launch run makes up to 60 attempts, then passes its remaining budget to an automatic continuation while provisioning remains enabled. A direct invocation of `provision.sh` still makes only one attempt.
 
 ## Resource limits
 
@@ -55,19 +55,21 @@ Optional repository variables:
 - `VM_DISPLAY_NAME`: defaults to `oplify-agent`. Keep this name unchanged while provisioning or after success, since it identifies the existing target VM.
 - `OCI_PROVISIONING_ENABLED`: absent by default. Set it to exactly `true` only after the launch configuration has been approved.
 
-The workflow must be on the repository's default branch for scheduled runs. Publishing the workflow alone does not enable automatic provisioning.
+Publish the workflow on the repository's default branch. Publishing alone does not start provisioning.
 
 1. Publish the reviewed changes to the intended repository.
 2. Enter the OCI secrets and confirm Hyderabad is the home region.
 3. Open Actions > Provision Hyderabad Always Free VM > Run workflow, leaving the mode as `preflight`. This reads OCI without creating resources.
 4. Check that the preflight succeeds and approve the specific VM creation configuration.
-5. Set `OCI_PROVISIONING_ENABLED=true` for automatic provisioning, then manually run the workflow with mode `launch` to start immediately. Clear capacity or rate-limit rejections are retried within the active run.
+5. Set `OCI_PROVISIONING_ENABLED=true` for automatic provisioning, then manually run the workflow with mode `launch` and `remaining_attempts=1000` to start immediately. Clear capacity or rate-limit rejections are retried within the active run. Do not start another launch chain while one is active.
 
-The schedule runs at minutes 2, 7, 12, and so on through 57, avoiding the start of the hour. GitHub may delay or drop scheduled runs. Public-repository schedules disable after 60 days without repository activity.
+The workflow starts immediately when dispatched and handles five-minute waits itself. It has no cron trigger, so a delayed scheduled run cannot accidentally start a new 1,000-attempt budget. GitHub runner startup and queuing can still delay execution.
 
-Within a launch run, the next attempt starts no sooner than five minutes after the previous attempt started. Every attempt repeats the inventory and duplicate checks. After 60 rejected attempts, the workflow uses its built-in token to dispatch a new run with `automatic=true`; that run requires `OCI_PROVISIONING_ENABLED=true`. Runner startup and GitHub queuing can delay the transition between runs. Jobs have a 330-minute timeout, below GitHub's six-hour runner limit. An unexpected job failure stops that run and does not dispatch a continuation.
+Within a launch run, the next attempt starts no sooner than five minutes after the previous attempt started. Every attempt repeats the inventory and duplicate checks. After at most 60 rejected attempts, the workflow uses its built-in token to dispatch a new run with `automatic=true` and the reduced `remaining_attempts`; that run requires `OCI_PROVISIONING_ENABLED=true`. The final run stops and disables the workflow when the total budget reaches zero. Runner startup and GitHub queuing can delay transitions. Jobs have a 330-minute timeout, below GitHub's six-hour runner limit. An unexpected job failure stops that run and does not dispatch a continuation.
 
-To stop an active retry loop, disable this workflow in GitHub Actions. The loop checks that state before each attempt. Set `OCI_PROVISIONING_ENABLED=false` to block future scheduled runs and automatic continuations; this flag does not interrupt an active run. Cancel the active run if an immediate stop is required, and inspect OCI for an unresolved launch before restarting.
+The initial `attempts_per_run` can be set between 1 and 60; continuations use 60. Setting the initial window to 1 permits a live handoff check after the first rejection and its five-minute wait, without increasing the total budget. At five-minute intervals, 1,000 rejected attempts span about 83 hours plus runner startup delays. Capacity is not guaranteed.
+
+To stop an active retry loop, disable this workflow in GitHub Actions. The loop checks that state before each attempt. Set `OCI_PROVISIONING_ENABLED=false` to block automatic continuations; this flag does not interrupt an active run. Cancel the active run if an immediate stop is required, and inspect OCI for an unresolved launch before restarting.
 
 Standard GitHub-hosted runners are free for public repositories. Private repositories use the owner's Actions allowance; a five-minute schedule can exceed it. Check the account's plan and spending controls before enabling a private repository's schedule.
 
